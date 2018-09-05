@@ -10,17 +10,18 @@ import usb.core
 import usb.util
 import time
 import array
+from math import floor, ceil, log2
 #import numpy
 
 class DI4108 :
     def __init__(self,fs=10000,v_range=None,chans=None,dig_in=False, \
      rate_in=False, rate_range=None, ffl=None, counter_in=False,dec=1,filt_settings=None,\
-     packet_size=128):
+     packet_size=None,poll_time=0.005):
         '''
         Initialize instance of DI4108 object.  Attributes:
         def __init__(self,fs=10000,v_range=10,chans=8,dig_in=False,  \
          rate_in=False, rate_range=1,counter_in=False,dec=1,filt_settings=None,\
-         packet_size=128)
+         packet_size=None, poll_time=0.005)
      
         fs=sampling frequency in Hz.  Must be <=160000 Hz
         
@@ -49,7 +50,10 @@ class DI4108 :
         
         counter_in=Boolean flag indicating whether to store counter input on Digital Input 3
         
-        packet_size=size of packets transferred in each sample.  Units=bytes.  Default=128 bytes
+        packet_size=size of packets transferred in each sample.  Units=bytes.  Default=None - this
+            causes a calculated value of packet_size=fs*poll_time*nchans*2 (# bytes/poll time)
+
+        poll_time=time between data reads (units=seconds).  Default=0.005 s.
         
         T. Golfinopoulos, 24 August 2018
         '''
@@ -93,6 +97,7 @@ class DI4108 :
                 raise ValueError(msg)
             else :
                 self.chans=chans
+                self.nchans=len(chans)
         elif type(chans) is int :
             self.nchans=chans
             if self.nchans<0 or self.nchans>8 :
@@ -105,6 +110,12 @@ class DI4108 :
         self.dig_in=dig_in #Boolean flag indicating whether or not to store digital inputs
         self.counter_in=counter_in #Boolean flag indicating whether to store counter input
         self.rate_in=rate_in #Boolean flag indicating whether to store rate input
+
+        #Add additional data entries to nchans to account for data size per sample.
+        #Each channel corresponds to 2 bytes (16 bits) of data.
+        self.nchans+=self.dig_in+self.counter_in+self.rate_in
+
+        self.poll_time=poll_time
         
         self.packet_size=packet_size #Size of packets transferred in each sample.
         
@@ -124,6 +135,9 @@ class DI4108 :
         self.cfg = self.dev.get_active_configuration()
         self.intf = self.cfg[(0,0)]
 
+        #Timeout for I/O operations - give up beyond this time [seconds]
+        self.timeout=10
+        
         self.ep_out = usb.util.find_descriptor(
             self.intf,
             # match the first OUT endpoint
@@ -229,13 +243,58 @@ class DI4108 :
         #Don't set filter if not specified - leave default.
         
         #Apply decimation window
-        ep_out.write('dec {}'.format(self.dec))
+        self.ep_out.write('dec {}'.format(self.dec))
         
         #Apply moving average filter setting for rate measurement on Digital Input DI2, if specified.
         if not self.ffl is None :
-            ep_out.write('ffl {}'.format(self.ffl))
+            self.ep_out.write('ffl {}'.format(self.ffl))
 
+        #Set packet size on device
+        self.ep_out.write('ps {}'.format(self._packet_size_ind))
+
+    def read(self):
+        '''
+        Read packet(s) - this will return data according to the listed channel set.
+        Each active channel returns two bytes, concatenated.  To unpack, see chans
+        list attribute, which shows the order of the channels.
+
+        USAGE:
+            this_data=my_di4108.read()
         
+        T. Golfinopoulos, 5 Sept. 2018
+        '''
+        #Scale packet size by 5 - not sure what sets the buffering
+        #but seems to be larger than a single packet
+        return self.ep_in.read(self.packet_size*5,self.timeout)
+
+    def trig_data_pulse(self,pulse_duration):
+        '''
+        Start data pulse and run for pulse_duration.  Poll data every poll_time seconds.
+        Return data array.
+
+        USAGE:
+            my_data=my_di4108.trig_data_pulse(pulse_duration)
+
+        INPUTS:
+            pulse_duration=duration of data pulse in seconds
+
+        OUTPUTS:
+            my_data=array of raw integer data.
+
+        T. Golfinopoulos, 5 September 2018.
+        '''
+        num_polls=ceil(pulse_duration/self.poll_time)
+        my_data=[None]*num_polls #Preallocate list
+        
+        self.ep_out.write('start 0') #Start collecting data.
+        
+        for i in range(num_polls) :
+            time.sleep(self.poll_time) #Wait poll time
+            my_data[i]=self.read() #Read data
+
+        self.ep_out.write('stop') #Stop data pulse
+        return my_data
+            
     def process_range(range_arg,allowed_range_vals) :
         '''
         USAGE:
@@ -288,7 +347,67 @@ class DI4108 :
         allowed_rate_ranges=[50E3,20E3,10E3,5E3,2E3,1E3,500,200,100,50,20,10]
         allowed_rate,rate_ind=DI4108.process_range(rate_range,allowed_rate_ranges)
         return (allowed_rate,rate_ind+1)
-    
+
+    @property
+    def poll_time(self):
+        return self._poll_time
+
+    @poll_time.setter
+    def poll_time(self,poll_time):
+        '''
+        Set time between data reads - units=seconds.
+
+        USAGE:
+            my_di4108.poll_time=poll_time
+
+        poll_time must be a numeric value > 0.
+
+        T. Golfinopoulos, 5 Sep. 2018
+        '''
+        if poll_time<=0.0 :
+            raise ValueError('poll_time must be numerical value > 0')
+        else :
+            self._poll_time=poll_time
+        
+    @property
+    def packet_size(self):
+        return self._packet_size
+
+    @packet_size.setter
+    def packet_size(self,packet_size):
+        '''
+        Set packet size, the number of bytes transferred in each transmission burst
+
+        USAGE:
+            my_di4108.packet_size=packet_size
+
+        packet_size can only be 16, 32, 64, 128, 256, 512, 1024, or 2048 bytes.
+        It should be chosen in such a way that the packet will be full on reads,
+        but will not overflow buffers.  This means that a consideration of the
+        sampling rate and number of channels to be digitized should be taken
+        into account.
+
+        The next largest value to these allowed values to the given packet_size will ultimately
+        be chosen.
+
+        If packet_size is None, then the packet size is set such that it will
+        be full after 5 ms, i.e. ceil(self.fs*self.poll_time)
+        '''
+        allowed_values=[16,32,64,128,256,512,1024,2048]
+        if packet_size is None :
+            #Calculate the packet size/poll_time by #samples*(data size in bytes)/sample*#samples/poll_time
+            #This is the default value
+            packet_size=ceil(self.fs*self.poll_time*self.nchans*2)
+
+        packet_size_ind=max(min(ceil(log2(packet_size))-4,len(allowed_values)-1),0) #Index of 0 corresponds to 2^4
+        allowed_packet_size=pow(2,packet_size_ind+4)
+        
+        #Don't use process_range - need next highest power of 2, rather than nearest value
+        #(allowed_packet_size,packet_size_ind)=self.process_range(packet_size,allowed_values)
+
+        self._packet_size=allowed_packet_size
+        self._packet_size_ind=packet_size_ind
+
     @property
     def v_range(self) :
         return self._v_range
