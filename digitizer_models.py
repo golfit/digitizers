@@ -118,6 +118,8 @@ class DI4108 :
         self.poll_time=poll_time
         
         self.packet_size=packet_size #Size of packets transferred in each sample.
+        print("Packet size={}".format(self.packet_size))
+        print("Poll time={} (adjusted to better fit packet size)".format(self.poll_time))
         
         #Establish connection to device
         #Make sure device is plugged into USB port ;)
@@ -255,6 +257,9 @@ class DI4108 :
         #Set packet size on device
         self.ep_out.write('ps {}'.format(self._packet_size_ind))
 
+        #Read device once to clear out buffer
+        self.ep_in.read(self.packet_size*5,self.timeout)
+
     def read(self):
         '''
         Read packet(s) - this will return data according to the listed channel set.
@@ -276,7 +281,7 @@ class DI4108 :
         Return data array.
 
         USAGE:
-            my_data=my_di4108.trig_data_pulse(pulse_duration)
+            (my_data,elapsed_time)=my_di4108.trig_data_pulse(pulse_duration)
 
         INPUTS:
             pulse_duration=duration of data pulse in seconds
@@ -284,12 +289,15 @@ class DI4108 :
         OUTPUTS:
             my_data=array of raw integer data.  Each element corresponds to
                 two bytes of data from a single channel.
+            elapsed_time=difference between start and stop times of digitizers.  Evaluated with
+                Python time library, so may not be very accurate.
 
         T. Golfinopoulos, 5 September 2018.
         '''
         num_polls=ceil(pulse_duration/self.poll_time)
         my_data=[None]*num_polls #Preallocate list
-        
+
+        t0=time.time()
         self.ep_out.write('start 0') #Start collecting data.
         
         for i in range(num_polls) :
@@ -297,7 +305,8 @@ class DI4108 :
             my_data[i]=self.read() #Read data
 
         self.ep_out.write('stop') #Stop data pulse
-        return my_data
+        tf=time.time()
+        return (my_data,tf-t0)
 
     def convert_data(self,raw_data_array):
         '''
@@ -318,6 +327,7 @@ class DI4108 :
         for i in range(len(raw_data_array)/self.number_records):
             ptr=0
             #Convert analog channels first - there are self.nchans of them
+            #Note: data are in two's complement.
             for j in range(self.nchans) :
                 ptr=i*number_records+j
                 output_data_array[ptr]=raw_data_array[ptr]/32768.0*self.v_range
@@ -329,10 +339,12 @@ class DI4108 :
                 output_data_array[ptr]=raw_data_array[ptr]>>8
 
             #See protocol documentation, Pages 15-16
+            #Note: data are in two's complement.
             if self.rate_in :
                 ptr+=1
                 output_data_array[ptr]=(raw_data_array[ptr]+32768)/65536.0*self.rate_range
 
+            #Note: data are in two's complement.
             if self.count_in :
                 ptr+=1
                 output_data_array[ptr]=raw_data_array[ptr]+32768
@@ -445,12 +457,16 @@ class DI4108 :
 
         packet_size_ind=max(min(ceil(log2(packet_size))-4,len(allowed_values)-1),0) #Index of 0 corresponds to 2^4
         allowed_packet_size=pow(2,packet_size_ind+4)
-        
+
         #Don't use process_range - need next highest power of 2, rather than nearest value
         #(allowed_packet_size,packet_size_ind)=self.process_range(packet_size,allowed_values)
-
         self._packet_size=allowed_packet_size
         self._packet_size_ind=packet_size_ind
+
+        #Recalculate poll time to better fite packet size
+        self.poll_time=self._packet_size/(self.fs*self.number_records*2)
+        
+
 
     @property
     def v_range(self) :
