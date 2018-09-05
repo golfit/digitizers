@@ -65,7 +65,7 @@ class DI4108 :
             self.v_range=10
              #+-10 V corresponds to voltage programming code of 0b0000
              #(four least-significant bits of channel slist program)
-            print(self.v_code) #Debug
+            print(self._v_code) #Debug
             #self.v_code=0
         else :
             try :
@@ -117,9 +117,14 @@ class DI4108 :
 
         self.poll_time=poll_time
         
+        self.packet_buffer_size=5 #Store this many packets between reads
+
+        self.poll_time*=self.packet_buffer_size
         self.packet_size=packet_size #Size of packets transferred in each sample.
+
+        
         print("Packet size={}".format(self.packet_size))
-        print("Poll time={} (adjusted to better fit packet size)".format(self.poll_time))
+        print("Poll time={} (adjusted to better fit packet size, and scaled by buffer size={})".format(self.poll_time,self.packet_buffer_size))
         
         #Establish connection to device
         #Make sure device is plugged into USB port ;)
@@ -164,10 +169,18 @@ class DI4108 :
             '''
             This method makes sure device responds to basic information test.
             '''
-            ep_o.write('info 0')
-            my_output=ep_i.read()
-            if my_output!='info 0 DATAQ\r' :
-                raise IOError("Device does not respond to info 0 with info 0 DATAQ\\r")
+            pass_test=False
+            num_tries=3
+            for i in range(num_tries) :
+                ep_o.write('info 0')
+                my_output=ep_i.read(self.packet_size*5)
+                #Join my_output into string.
+                my_output=''.join([chr(x) for x in my_output])
+                if my_output == 'info 0 DATAQ\r' :
+                    pass_test=True
+
+            if not pass_test :
+                raise IOError("Device does not respond to info 0 with info 0 DATAQ\\r - responds with {}".format(my_output))
         
         if hasattr(self.ep_out,'__iter__') :
             assert(len(self.ep_out)==len(self.ep_in))
@@ -201,7 +214,7 @@ class DI4108 :
             #5=>+-0.2 V.  See protocol.
             #Bit-shift code number by eight bits to put between bits 
             #8-11 for voltage range.
-            record_config_number.append(self.chans[i]+(self.v_code<<8))
+            record_config_number.append(self.chans[i]+(self._v_code<<8))
         
 
         #If digital inputs are requested, add to list.
@@ -219,7 +232,7 @@ class DI4108 :
         
         #If counter input is requested, add to list with activation
         #code, 10
-        if self.count_in :
+        if self.counter_in :
             record_config_number.append(10)
 
         #Make sure number of records matches configured number of records
@@ -227,7 +240,7 @@ class DI4108 :
         
         #Invoke slist commands to configure device
         for record_counter in range(len(record_config_number)) :
-            self.ep_out.write('slist {} {}'.format{record_counter,record_config_num[i]})
+            self.ep_out.write('slist {} {}'.format(record_counter,record_config_number[i]))
         
         #Next, set sampling frequency
         #Calculate srate parameter from desired sampling frequency, self.fs
@@ -271,9 +284,9 @@ class DI4108 :
         
         T. Golfinopoulos, 5 Sept. 2018
         '''
-        #Scale packet size by 5 - not sure what sets the buffering
+        #Scale packet size by a buffer length (default=5) - not sure what sets the buffering
         #but seems to be larger than a single packet
-        return self.ep_in.read(self.packet_size*5,self.timeout)
+        return self.ep_in.read(self.packet_size*self.packet_buffer_size,self.timeout)
 
     def trig_data_pulse(self,pulse_duration):
         '''
@@ -294,19 +307,43 @@ class DI4108 :
 
         T. Golfinopoulos, 5 September 2018.
         '''
+        self.ep_out.write('info 0')
+        
         num_polls=ceil(pulse_duration/self.poll_time)
         my_data=[None]*num_polls #Preallocate list
 
-        t0=time.time()
         self.ep_out.write('start 0') #Start collecting data.
-        
+        t0=time.time()
+        temp=self.read() #Read data to clear buffer
         for i in range(num_polls) :
-            time.sleep(self.poll_time) #Wait poll time
             my_data[i]=self.read() #Read data
+            tb=time.time()
+            #Correct by removing transmission time
+            time.sleep((i+1)*self.poll_time-(tb-t0)) #Wait poll time
 
-        self.ep_out.write('stop') #Stop data pulse
         tf=time.time()
+        self.ep_out.write('stop') #Stop data pulse
+
+        #Collapse data into one-dimensional array
+        print("Number of packets={}".format(len(my_data)))
+        data=[]
+        #first_data_pt=''.join([chr(x) for x in my_data[0]])
+        #print(first_data_pt)
+        for elem in my_data[0:] : #Skip first sample - from ps
+            data+=elem
+
+        #Combine separated two-bytes into one number
+        my_data=[None]*int(len(data)/2)
+
+        for i in range(len(my_data)) :
+            my_data[i]=data[2*i]+(data[2*i+1]<<8)
         return (my_data,tf-t0)
+
+    def twos_comp(val, bits):
+        """compute the 2's complement of int value val"""
+        if (val & (1 << (bits - 1))) != 0: # if sign bit is set e.g., 8bit: 128-255
+            val = val - (1 << bits)        # compute negative value
+        return val
 
     def convert_data(self,raw_data_array):
         '''
@@ -324,13 +361,17 @@ class DI4108 :
         '''
         output_data_array=[None]*len(raw_data_array)
         
-        for i in range(len(raw_data_array)/self.number_records):
+        for i in range(int(len(raw_data_array)/self.number_records)):
             ptr=0
             #Convert analog channels first - there are self.nchans of them
             #Note: data are in two's complement.
             for j in range(self.nchans) :
-                ptr=i*number_records+j
-                output_data_array[ptr]=raw_data_array[ptr]/32768.0*self.v_range
+                ptr=i*self.number_records+j
+                try :
+                    output_data_array[ptr]=DI4108.twos_comp(raw_data_array[ptr],16)/32768.0*self.v_range
+                except :
+                    print(raw_data_array[ptr])
+                    raise 
             
             #After analog channels, data comes in as digital input, rate, and counter
             if self.dig_in :
@@ -345,11 +386,11 @@ class DI4108 :
                 output_data_array[ptr]=(raw_data_array[ptr]+32768)/65536.0*self.rate_range
 
             #Note: data are in two's complement.
-            if self.count_in :
+            if self.counter_in :
                 ptr+=1
                 output_data_array[ptr]=raw_data_array[ptr]+32768
                 
-         return output_data_array   
+        return output_data_array   
 
     def process_range(range_arg,allowed_range_vals) :
         '''
@@ -453,7 +494,7 @@ class DI4108 :
         if packet_size is None :
             #Calculate the packet size/poll_time by #samples*(data size in bytes)/sample*#samples/poll_time
             #This is the default value
-            packet_size=ceil(self.fs*self.poll_time*self.number_records*2)
+            packet_size=ceil(self.fs*self.poll_time/self.packet_buffer_size*self.number_records*2)
 
         packet_size_ind=max(min(ceil(log2(packet_size))-4,len(allowed_values)-1),0) #Index of 0 corresponds to 2^4
         allowed_packet_size=pow(2,packet_size_ind+4)
@@ -464,10 +505,8 @@ class DI4108 :
         self._packet_size_ind=packet_size_ind
 
         #Recalculate poll time to better fite packet size
-        self.poll_time=self._packet_size/(self.fs*self.number_records*2)
+        self.poll_time=self._packet_size/(self.fs*self.number_records*2)*self.packet_buffer_size
         
-
-
     @property
     def v_range(self) :
         return self._v_range
@@ -488,6 +527,10 @@ class DI4108 :
         allowed_v_range,v_code=DI4108.process_v_range(v_range)
         self._v_range=allowed_v_range
         self._v_code=v_code
+
+    #property
+    def v_code(self):
+        return self._v_code
     
     @property
     def rate_range(self) :
@@ -507,7 +550,7 @@ class DI4108 :
         T. Golfinopoulos, 24 August 2018
         '''
         allowed_rate_range,rate_code=DI4108.process_rate_range(rate_range)
-        self.rate_range=allowed_rate_range
+        self._rate_range=allowed_rate_range
         self.rate_code=rate_code
     
     @property
@@ -534,8 +577,10 @@ class DI4108 :
             Ensure the settings have an allowed value
             '''
             if not x in [0,1,2,3] :
-                raise ValueError("filt_settings must have value(s) of 0, 1, 2, or 3")
-        
+                raise ValueError("filt_settings must have value(s) of 0, 1, 2, or 3 - value is {}".format(x))
+
+        if filt_settings is None :
+            filt_settings=0 #Default value for filt_settings
         if type(filt_settings) is list :
             for x in filt_settings :
                 test_val(x)
