@@ -113,7 +113,7 @@ class DI4108 :
 
         #Add additional data entries to nchans to account for data size per sample.
         #Each channel corresponds to 2 bytes (16 bits) of data.
-        self.nchans+=self.dig_in+self.counter_in+self.rate_in
+        self.number_records=self.nchans+self.dig_in+self.counter_in+self.rate_in
 
         self.poll_time=poll_time
         
@@ -219,6 +219,9 @@ class DI4108 :
         #code, 10
         if self.count_in :
             record_config_number.append(10)
+
+        #Make sure number of records matches configured number of records
+        assert(len(record_config_number)==self.number_records)
         
         #Invoke slist commands to configure device
         for record_counter in range(len(record_config_number)) :
@@ -279,7 +282,8 @@ class DI4108 :
             pulse_duration=duration of data pulse in seconds
 
         OUTPUTS:
-            my_data=array of raw integer data.
+            my_data=array of raw integer data.  Each element corresponds to
+                two bytes of data from a single channel.
 
         T. Golfinopoulos, 5 September 2018.
         '''
@@ -294,7 +298,47 @@ class DI4108 :
 
         self.ep_out.write('stop') #Stop data pulse
         return my_data
+
+    def convert_data(self,raw_data_array):
+        '''
+        Convert data to floating point values (where appropriate) according to ranges.
+
+        USAGE:
+            my_di4108.convert_data(raw_data_array)
+
+        INPUT:
+            raw_data_array=array of data, each element of which is an integer
+
+        OUTPUT:
+            array with same length of raw_data, but converted to floating point for
+            analog channels, according to voltage range.
+        '''
+        output_data_array=[None]*len(raw_data_array)
+        
+        for i in range(len(raw_data_array)/self.number_records):
+            ptr=0
+            #Convert analog channels first - there are self.nchans of them
+            for j in range(self.nchans) :
+                ptr=i*number_records+j
+                output_data_array[ptr]=raw_data_array[ptr]/32768.0*self.v_range
             
+            #After analog channels, data comes in as digital input, rate, and counter
+            if self.dig_in :
+                ptr+=1
+                #Get bits 8-16
+                output_data_array[ptr]=raw_data_array[ptr]>>8
+
+            #See protocol documentation, Pages 15-16
+            if self.rate_in :
+                ptr+=1
+                output_data_array[ptr]=(raw_data_array[ptr]+32768)/65536.0*self.rate_range
+
+            if self.count_in :
+                ptr+=1
+                output_data_array[ptr]=raw_data_array[ptr]+32768
+                
+         return output_data_array   
+
     def process_range(range_arg,allowed_range_vals) :
         '''
         USAGE:
@@ -397,7 +441,7 @@ class DI4108 :
         if packet_size is None :
             #Calculate the packet size/poll_time by #samples*(data size in bytes)/sample*#samples/poll_time
             #This is the default value
-            packet_size=ceil(self.fs*self.poll_time*self.nchans*2)
+            packet_size=ceil(self.fs*self.poll_time*self.number_records*2)
 
         packet_size_ind=max(min(ceil(log2(packet_size))-4,len(allowed_values)-1),0) #Index of 0 corresponds to 2^4
         allowed_packet_size=pow(2,packet_size_ind+4)
