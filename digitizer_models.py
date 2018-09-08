@@ -13,15 +13,20 @@ import array
 from math import floor, ceil, log2
 #import numpy
 
-class DI4108 :
+#
+
+class DI4108_WRAPPER :
+    _FS_MIN=915.5413
+    _FS_MAX=160E3
+    
     def __init__(self,fs=10000,v_range=None,chans=None,dig_in=False, \
      rate_in=False, rate_range=None, ffl=None, counter_in=False,dec=1,filt_settings=None,\
-     packet_size=None,poll_time=0.005):
+     packet_size=None,packet_buffer_size=5,packet_time=0.005):
         '''
-        Initialize instance of DI4108 object.  Attributes:
+        Initialize instance of DI4108_WRAPPER object.  Attributes:
         def __init__(self,fs=10000,v_range=10,chans=8,dig_in=False,  \
          rate_in=False, rate_range=1,counter_in=False,dec=1,filt_settings=None,\
-         packet_size=None, poll_time=0.005)
+         packet_size=None, packet_buffer_size=5,packet_time=0.005)
      
         fs=sampling frequency in Hz.  Must be <=160000 Hz
         
@@ -38,7 +43,7 @@ class DI4108 :
         ffl=Setting for moving average filter applied to rate measurement on Digital Input 2.  Default=None.
          Can be an integer between 1 and 64, inclusive.
         
-        dec=decimation factor.  Default=1 (i.e. no decimation).  Can be between 1 and 512.
+        dec=decimation factor.  Default=1 (i.e. no decimation).  Can be between 1 and 512 (inclusive).
         
         filt_settings=filter controls for analog inputs.  Default is to select the last point
          in the decimation window.  Allowable values are 0 (select last point), 1 (apply
@@ -53,19 +58,22 @@ class DI4108 :
         packet_size=size of packets transferred in each sample.  Units=bytes.  Default=None - this
             causes a calculated value of packet_size=fs*poll_time*nchans*2 (# bytes/poll time)
 
-        poll_time=time between data reads (units=seconds).  Default=0.005 s.
+        packet_buffer_size=number of packets between data polls (i.e. number of packets in on-device buffer).  Default=5
+
+        packet_time=time between data reads (units=seconds).  Default=0.005 s.  Poll time=packet_time*packet_buffer_size.
         
         T. Golfinopoulos, 24 August 2018
         '''
+        self.debug=False #Debug flag
+        
         self.fs=fs #Sampling frequency
-        if self.fs>160E3 :
-            raise ValueError("Sampling frequency must be <=160000 Hz")
         
         if v_range is None :
             self.v_range=10
              #+-10 V corresponds to voltage programming code of 0b0000
              #(four least-significant bits of channel slist program)
-            print(self._v_code) #Debug
+            if self.debugging():
+                print(self._v_code) #Debug
             #self.v_code=0
         else :
             try :
@@ -88,24 +96,7 @@ class DI4108 :
         self.filt_settings=filt_settings
         self.dec=dec
         
-        msg="chans input can be either empty, or a list of 8 or fewer channel numbers between 0 and 7 (inclusive), or an integer between 0 and 8 (inclusive)"
-        if chans is None :
-            self.nchans=8
-            self.chans=list(range(self.nchans))
-        elif type(chans) is list :
-            if any([x<0 or x>7] for x in chans) or len(chans)>8:
-                raise ValueError(msg)
-            else :
-                self.chans=chans
-                self.nchans=len(chans)
-        elif type(chans) is int :
-            self.nchans=chans
-            if self.nchans<0 or self.nchans>8 :
-                raise ValueError(msg)
-            else :
-                self.chans=list(range(self.nchans))
-        else :
-            raise ValueError(msg)
+        self.chans=chans
         
         self.dig_in=dig_in #Boolean flag indicating whether or not to store digital inputs
         self.counter_in=counter_in #Boolean flag indicating whether to store counter input
@@ -115,82 +106,93 @@ class DI4108 :
         #Each channel corresponds to 2 bytes (16 bits) of data.
         self.number_records=self.nchans+self.dig_in+self.counter_in+self.rate_in
 
-        self.poll_time=poll_time
+        #self.poll_time=poll_time
         
-        self.packet_buffer_size=5 #Store this many packets between reads
+        self.packet_buffer_size=packet_buffer_size #Store this many packets between reads
 
-        self.poll_time*=self.packet_buffer_size
+        self.poll_time=self.packet_buffer_size*packet_time
         self.packet_size=packet_size #Size of packets transferred in each sample.
 
+        if self.debugging():
+            print("Packet size={}".format(self.packet_size))
+            print("Poll time={} (adjusted to better fit packet size, and scaled by buffer size={})".format(self.poll_time,self.packet_buffer_size))
+            print("Ready to connect to a USB device")
         
-        print("Packet size={}".format(self.packet_size))
-        print("Poll time={} (adjusted to better fit packet size, and scaled by buffer size={})".format(self.poll_time,self.packet_buffer_size))
+        try :
+            #Establish connection to device
+            #Make sure device is plugged into USB port ;)
+            #Find the device - the DATAQ DI-4108 has idVendor of 0683 and idProduct of 4108.  If there are multiple devices, you can use address and bus as unique identifiers
+            self.dev=usb.core.find(idVendor=0x0683,idProduct=0x4108)
+
+            if self.dev is None :
+                raise ValueError('Device not found')
+
+            # set the active configuration. With no arguments, the first
+            # configuration will be the active one
+            self.dev.set_configuration()
+
+            # get an endpoint instance
+            self.cfg = self.dev.get_active_configuration()
+            self.intf = self.cfg[(0,0)]
+
+            #Timeout for I/O operations - give up beyond this time [seconds]
+            self.timeout=10
+            
+            self.ep_out = usb.util.find_descriptor(
+                self.intf,
+                # match the first OUT endpoint
+                custom_match = \
+                lambda e: \
+                    usb.util.endpoint_direction(e.bEndpointAddress) == \
+                    usb.util.ENDPOINT_OUT)
+
+            self.ep_in = usb.util.find_descriptor(
+                self.intf,
+                # match the first OUT endpoint
+                custom_match = \
+                lambda e: \
+                    usb.util.endpoint_direction(e.bEndpointAddress) == \
+                    usb.util.ENDPOINT_IN)
+
+            assert self.ep_out is not None
+            assert self.ep_in is not None
+            
+            #Test that all devices respond correctly to basic requests for information
+            def test_dev(ep_o,ep_i):
+                '''
+                This method makes sure device responds to basic information test.
+                '''
+                pass_test=False
+                num_tries=3
+                for i in range(num_tries) :
+                    ep_o.write('info 0')
+                    my_output=ep_i.read(self.packet_size*5)
+                    #Join my_output into string.
+                    my_output=''.join([chr(x) for x in my_output])
+                    if my_output == 'info 0 DATAQ\r' :
+                        pass_test=True
+
+                if not pass_test :
+                    raise IOError("Device does not respond to info 0 with info 0 DATAQ\\r - responds with {}".format(my_output))
+            
+            if hasattr(self.ep_out,'__iter__') :
+                assert(len(self.ep_out)==len(self.ep_in))
+                for i in range(len(self.ep_out)) :
+                    test_dev(self.ep_out[i],self.ep_in[i])
+            else :
+                test_dev(self.ep_out,self.ep_in)
         
-        #Establish connection to device
-        #Make sure device is plugged into USB port ;)
-        #Find the device - the DATAQ DI-4108 has idVendor of 0683 and idProduct of 4108.  If there are multiple devices, you can use address and bus as unique identifiers
-        self.dev=usb.core.find(idVendor=0x0683,idProduct=0x4108)
-
-        if self.dev is None :
-            raise ValueError('Device not found')
-
-        # set the active configuration. With no arguments, the first
-        # configuration will be the active one
-        self.dev.set_configuration()
-
-        # get an endpoint instance
-        self.cfg = self.dev.get_active_configuration()
-        self.intf = self.cfg[(0,0)]
-
-        #Timeout for I/O operations - give up beyond this time [seconds]
-        self.timeout=10
+        except :
+            print("Can't create a new USB connection may exist already")
         
-        self.ep_out = usb.util.find_descriptor(
-            self.intf,
-            # match the first OUT endpoint
-            custom_match = \
-            lambda e: \
-                usb.util.endpoint_direction(e.bEndpointAddress) == \
-                usb.util.ENDPOINT_OUT)
-
-        self.ep_in = usb.util.find_descriptor(
-            self.intf,
-            # match the first OUT endpoint
-            custom_match = \
-            lambda e: \
-                usb.util.endpoint_direction(e.bEndpointAddress) == \
-                usb.util.ENDPOINT_IN)
-
-        assert self.ep_out is not None
-        assert self.ep_in is not None
-        
-        #Test that all devices respond correctly to basic requests for information
-        def test_dev(ep_o,ep_i):
-            '''
-            This method makes sure device responds to basic information test.
-            '''
-            pass_test=False
-            num_tries=3
-            for i in range(num_tries) :
-                ep_o.write('info 0')
-                my_output=ep_i.read(self.packet_size*5)
-                #Join my_output into string.
-                my_output=''.join([chr(x) for x in my_output])
-                if my_output == 'info 0 DATAQ\r' :
-                    pass_test=True
-
-            if not pass_test :
-                raise IOError("Device does not respond to info 0 with info 0 DATAQ\\r - responds with {}".format(my_output))
-        
-        if hasattr(self.ep_out,'__iter__') :
-            assert(len(self.ep_out)==len(self.ep_in))
-            for i in range(len(self.ep_out)) :
-                test_dev(self.ep_out[i],self.ep_in[i])
-        else :
-            test_dev(self.ep_out,self.ep_in)
+        if self.debugging() :
+            print("Ready to set up device")
         
         #Configure device
         self.setup_device()
+        
+        if self.debugging() :
+            print("Done initializing device")
     
     def setup_device(self) :
         '''
@@ -246,6 +248,9 @@ class DI4108 :
         #Calculate srate parameter from desired sampling frequency, self.fs
         #and decimation factor.  Enforce range for srate.  See protocol
         self.srate=max(375,min(int(60E6/(self.fs*self.dec)),65535))
+
+        #Calculate real sampling frequency given integer-ized srate
+        self.fs_actual=60.0E6/(self.srate*self.dec)
         
         self.ep_out.write('srate {}'.format(self.srate))
         
@@ -325,7 +330,8 @@ class DI4108 :
         self.ep_out.write('stop') #Stop data pulse
 
         #Collapse data into one-dimensional array
-        print("Number of packets={}".format(len(my_data)))
+        if self.debugging():
+            print("Number of packets={}".format(len(my_data)))
         data=[]
         #first_data_pt=''.join([chr(x) for x in my_data[0]])
         #print(first_data_pt)
@@ -368,9 +374,10 @@ class DI4108 :
             for j in range(self.nchans) :
                 ptr=i*self.number_records+j
                 try :
-                    output_data_array[ptr]=DI4108.twos_comp(raw_data_array[ptr],16)/32768.0*self.v_range
+                    output_data_array[ptr]=DI4108_WRAPPER.twos_comp(raw_data_array[ptr],16)/32768.0*self.v_range
                 except :
-                    print(raw_data_array[ptr])
+                    if self.debugging():
+                        print(raw_data_array[ptr])
                     raise 
             
             #After analog channels, data comes in as digital input, rate, and counter
@@ -427,7 +434,7 @@ class DI4108 :
         See also process_range, process_rate_range
         '''
         allowed_voltage_ranges=[10,5,2,1,0.5,0.2]
-        return DI4108.process_range(v_range,allowed_voltage_ranges)
+        return DI4108_WRAPPER.process_range(v_range,allowed_voltage_ranges)
     
     def process_rate_range(rate_range) :
         '''
@@ -442,29 +449,167 @@ class DI4108 :
         See also process_range, process_v_range
         '''
         allowed_rate_ranges=[50E3,20E3,10E3,5E3,2E3,1E3,500,200,100,50,20,10]
-        allowed_rate,rate_ind=DI4108.process_range(rate_range,allowed_rate_ranges)
+        allowed_rate,rate_ind=DI4108_WRAPPER.process_range(rate_range,allowed_rate_ranges)
         return (allowed_rate,rate_ind+1)
 
     @property
-    def poll_time(self):
-        return self._poll_time
+    def fs(self):
+        return self._fs
+    
+    @fs.setter
+    def fs(self,fs):
+        if fs < DI4108_WRAPPER._FS_MIN or fs > DI4108_WRAPPER._FS_MAX :
+            raise ValueError("Sampling frequency must be <={} Hz and >={} Hz".format(DI4108_WRAPPER._FS_MIN,DI4108_WRAPPER._FS_MAX))
+        else :
+            self._fs=fs
+    
+    @property
+    def v_range(self) :
+        return self._v_range
 
-    @poll_time.setter
-    def poll_time(self,poll_time):
+    @v_range.setter
+    def v_range(self,v_range):
+        '''
+        Set a new value for v_range - side-effect method.
+        Sets both v_range and v_code attributes.
+        
+        Uses process_v_range(v_range), which returns a tuple of
+        (v_range,v_code), and restricts v_range to allowed voltage ranges,
+        [10, 5, 2, 1, 0.5, 0.2] V, by finding the closest allowed voltage
+        to given voltage.  Index in this list is v_code.
+        
+        T. Golfinopoulos, 24 August 2018
+        '''
+        allowed_v_range,v_code=DI4108_WRAPPER.process_v_range(v_range)
+        self._v_range=allowed_v_range
+        self._v_code=v_code
+        
+    @property
+    def chans(self):
+        return self._chans
+    
+    @chans.setter
+    def chans(self,chans):
+        '''
+        Set which channels on DI4108 are active, and what order they are polled.
+        
+        USAGE:
+            my_di4108.chans=chans_input
+        
+        When chans_input is None, chans defaults to the list, [0,1,2,3,4,5,6,7]
+        When chans_input is an integer between 0 and 7 (inclusive), chans is list(range(self.nchans))
+        When chans_input is a list whose elements are between 0 and 7 (inclusive) and are unique, chans is assigned this list
+
+        Otherwise, a ValueError is raised.
+
+        T. Golfinopoulos, 7 September 2018
+        '''
+        
+        msg="chans input can be either empty, or a list of 8 or fewer unique channel numbers between 0 and 7 (inclusive), or an integer between 0 and 8 (inclusive)"
+        if chans is None :
+            self.nchans=8
+            self._chans=list(range(self.nchans))
+        elif type(chans) is list :
+            if any([x<0 or x>7 for x in chans]) or len(chans)>8:
+                raise ValueError(msg)
+            else :
+                for i in range(len(chans)) :
+                    if chans[i] in chans[0:i]+chans[i+1:] :
+                        #Duplicate values in list
+                        raise ValueError(msg)
+                
+                self._chans=chans
+                self.nchans=len(chans)
+                
+        elif type(chans) is int :
+            self.nchans=chans
+            if self.nchans<0 or self.nchans>8 :
+                raise ValueError(msg)
+            else :
+                self._chans=list(range(self.nchans))
+        else :
+            raise ValueError(msg)
+    
+    @property
+    def dig_in(self):
+        return self._dig_in
+    
+    @dig_in.setter
+    def dig_in(self,dig_in):
+        '''
+        dig_in is a Boolean flag indicating whether the digital input data
+        should be polled on every sample.
+        
+        USAGE:
+            my_di4108.dig_in=dig_in
+        
+        dig_in must be Boolean
+        '''
+        if not dig_in is True and not dig_in is False :
+            raise ValueError("dig_in must be a Boolean flag, True or False")
+        else :
+            self._dig_in=dig_in
+    
+    @property
+    def rate_in(self):
+        return self._rate_in
+    
+    @rate_in.setter
+    def rate_in(self,rate_in):
+        '''
+        rate_in is a Boolean flag indicating whether the rate measure on Digital Input 2 
+        should be polled on every sample.
+        
+        USAGE:
+            my_di4108.rate_in=rate_in
+        
+        rate_in must be Boolean
+        '''
+        if not rate_in is True and not rate_in is False :
+            raise ValueError("rate_in must be a Boolean flag, True or False")
+        else :
+            self._rate_in=rate_in
+    
+    @property
+    def counter_in(self):
+        return self._counter_in
+    
+    @counter_in.setter
+    def counter_in(self,counter_in):
+        '''
+        counter_in is a Boolean flag indicating whether the counter measure on Digital Input 3 
+        should be polled on every sample.
+        
+        USAGE:
+            my_di4108.counter_in=counter_in
+        
+        counter_in must be Boolean
+        '''
+        if not counter_in is True and not counter_in is False :
+            raise ValueError("counter_in must be a Boolean flag, True or False")
+        else :
+            self._counter_in=counter_in
+        
+    @property
+    def packet_time(self):
+        return self._packet_time
+
+    @packet_time.setter
+    def packet_time(self,packet_time):
         '''
         Set time between data reads - units=seconds.
 
         USAGE:
-            my_di4108.poll_time=poll_time
+            my_di4108.packet_time=packet_time
 
-        poll_time must be a numeric value > 0.
+        packet_time must be a numeric value > 0.
 
         T. Golfinopoulos, 5 Sep. 2018
         '''
-        if poll_time<=0.0 :
-            raise ValueError('poll_time must be numerical value > 0')
+        if packet_time<=0.0 :
+            raise ValueError('packet_time must be numerical value > 0')
         else :
-            self._poll_time=poll_time
+            self._packet_time=packet_time
         
     @property
     def packet_size(self):
@@ -506,31 +651,17 @@ class DI4108 :
 
         #Recalculate poll time to better fite packet size
         self.poll_time=self._packet_size/(self.fs*self.number_records*2)*self.packet_buffer_size
-        
+    
     @property
-    def v_range(self) :
-        return self._v_range
-
-    @v_range.setter
-    def v_range(self,v_range):
-        '''
-        Set a new value for v_range - side-effect method.
-        Sets both v_range and v_code attributes.
+    def packet_buffer_size(self) :
+        return self._packet_buffer_size
         
-        Uses process_v_range(v_range), which returns a tuple of
-        (v_range,v_code), and restricts v_range to allowed voltage ranges,
-        [10, 5, 2, 1, 0.5, 0.2] V, by finding the closest allowed voltage
-        to given voltage.  Index in this list is v_code.
-        
-        T. Golfinopoulos, 24 August 2018
-        '''
-        allowed_v_range,v_code=DI4108.process_v_range(v_range)
-        self._v_range=allowed_v_range
-        self._v_code=v_code
-
-    #property
-    def v_code(self):
-        return self._v_code
+    @packet_buffer_size.setter
+    def packet_buffer_size(self, packet_buffer_size) :
+        if int(packet_buffer_size) < 1 :
+            raise ValueError("packet_buffer_size must be an integer greater than or equal to 1 - you entered {}".format(packet_buffer_size))
+        else :
+            self._packet_buffer_size=int(packet_buffer_size) #Ensure input is integer
     
     @property
     def rate_range(self) :
@@ -549,7 +680,7 @@ class DI4108 :
         
         T. Golfinopoulos, 24 August 2018
         '''
-        allowed_rate_range,rate_code=DI4108.process_rate_range(rate_range)
+        allowed_rate_range,rate_code=DI4108_WRAPPER.process_rate_range(rate_range)
         self._rate_range=allowed_rate_range
         self.rate_code=rate_code
     
@@ -651,3 +782,9 @@ class DI4108 :
             raise ValueError("led_val must be an integer, 0<=led_val<=7")
         else :
             self.ep_out.write('led {}'.format(led_val))
+    
+    def debugging(self):
+        import os
+        if self.debug == None:
+            self.debug=os.getenv("DEBUG_DEVICES")
+        return(self.debug)
