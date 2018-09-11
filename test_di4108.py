@@ -1,12 +1,12 @@
-#Test di4108 model
+#Test DI4108_WRAPPER model
 #T. Golfinopoulos, 5 Sept. 2018
 
 import numpy
 import matplotlib.pyplot as plt
 from math import ceil
-from digitizer_models import DI4108
+from digitizer_models import DI4108_WRAPPER
 
-my_di4108=DI4108(v_range=0.250) 
+my_di4108=DI4108_WRAPPER(v_range=1.000) 
 
 pulse_duration=1.0 #Length of pulse
 
