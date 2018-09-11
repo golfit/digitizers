@@ -135,8 +135,8 @@ class DI4108_WRAPPER :
             self.cfg = self.dev.get_active_configuration()
             self.intf = self.cfg[(0,0)]
 
-            #Timeout for I/O operations - give up beyond this time [seconds]
-            self.timeout=10
+            #Timeout for I/O operations - give up beyond this time [milliseconds]
+            self.timeout=1000
             
             self.ep_out = usb.util.find_descriptor(
                 self.intf,
@@ -154,8 +154,8 @@ class DI4108_WRAPPER :
                     usb.util.endpoint_direction(e.bEndpointAddress) == \
                     usb.util.ENDPOINT_IN)
 
-            assert self.ep_out is not None
-            assert self.ep_in is not None
+            assert not self.ep_out is None
+            assert not self.ep_in is None
             
             #Test that all devices respond correctly to basic requests for information
             def test_dev(ep_o,ep_i):
@@ -324,7 +324,9 @@ class DI4108_WRAPPER :
             my_data[i]=self.read() #Read data
             tb=time.time()
             #Correct by removing transmission time
-            time.sleep((i+1)*self.poll_time-(tb-t0)) #Wait poll time
+            wait_time=(i+1)*self.poll_time-(tb-t0)
+            if wait_time>0:
+                time.sleep(wait_time) #Wait until next poll time, if there is time left to wait
 
         tf=time.time()
         self.ep_out.write('stop') #Stop data pulse
