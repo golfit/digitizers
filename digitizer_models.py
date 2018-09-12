@@ -181,15 +181,18 @@ class DI4108_WRAPPER :
                     test_dev(self.ep_out[i],self.ep_in[i])
             else :
                 test_dev(self.ep_out,self.ep_in)
-            
-            if self.debugging() :
-                print("Ready to set up device")
-
-            #Configure device
-            self.setup_device()
         
         except :
             print("Can't create a new USB connection may exist already")
+        
+        if self.debugging() :
+            print("Ready to set up device")
+        
+        #Configure device
+        try :
+            self.setup_device()
+        except:
+            print("Can't setup device - may not be connected")
         
         if self.debugging() :
             print("Done initializing device")
