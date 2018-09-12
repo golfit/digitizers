@@ -70,11 +70,7 @@ for command in commands :
     s.send(''.encode())
     print('data sent')
     print(command.encode())
-    s.close()
     
-    #Send settings to server
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect(server_addr)
     buffer_size=4096
     result = s.recv(buffer_size)
     all_result=[]
