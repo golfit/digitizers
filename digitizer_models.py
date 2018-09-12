@@ -299,7 +299,7 @@ class DI4108_WRAPPER :
         Return data array.
 
         USAGE:
-            (my_data,elapsed_time)=my_di4108.trig_data_pulse(pulse_duration)
+            (my_data,elapsed_time,raw_data)=my_di4108.trig_data_pulse(pulse_duration)
 
         INPUTS:
             pulse_duration=duration of data pulse in seconds
@@ -309,19 +309,21 @@ class DI4108_WRAPPER :
                 two bytes of data from a single channel.
             elapsed_time=difference between start and stop times of digitizers.  Evaluated with
                 Python time library, so may not be very accurate.
+            raw_data=array of raw bytes data.  Each pair of elements, (0,1), (2,3), etc. comprise one
+                2-byte (16-bit) integer.  Length is twice that of my_data
 
-        T. Golfinopoulos, 5 September 2018.
+        T. Golfinopoulos, 5 September 2018, 12 September 2018.
         '''
         self.ep_out.write('info 0')
         
         num_polls=ceil(pulse_duration/self.poll_time)
-        my_data=[None]*num_polls #Preallocate list
+        raw_data=[None]*num_polls #Preallocate list
 
         self.ep_out.write('start 0') #Start collecting data.
         t0=time.time()
         temp=self.read() #Read data to clear buffer
         for i in range(num_polls) :
-            my_data[i]=self.read() #Read data
+            raw_data[i]=self.read() #Read data
             tb=time.time()
             #Correct by removing transmission time
             wait_time=(i+1)*self.poll_time-(tb-t0)
@@ -333,19 +335,16 @@ class DI4108_WRAPPER :
 
         #Collapse data into one-dimensional array
         if self.debugging():
-            print("Number of packets={}".format(len(my_data)))
+            print("Number of packets={}".format(len(raw_data)))
         data=[]
-        #first_data_pt=''.join([chr(x) for x in my_data[0]])
+        #first_data_pt=''.join([chr(x) for x in raw_data[0]])
         #print(first_data_pt)
-        for elem in my_data[0:] : #Skip first sample - from ps
+        for elem in raw_data[0:] : #Skip first sample - from ps
             data+=elem
 
-        #Combine separated two-bytes into one number
-        my_data=[None]*int(len(data)/2)
-
-        for i in range(len(my_data)) :
-            my_data[i]=data[2*i]+(data[2*i+1]<<8)
-        return (my_data,tf-t0)
+        my_data=self.convert_bytes_to_int(data)
+        
+        return (my_data,tf-t0,data)
 
     def twos_comp(val, bits):
         """compute the 2's complement of int value val"""
@@ -353,6 +352,31 @@ class DI4108_WRAPPER :
             val = val - (1 << bits)        # compute negative value
         return val
 
+    def convert_bytes_to_int(self,bytes_data):
+        '''
+        Convert array consists of list of single-byte elements,
+        where pairs of elements - (0,1), (2,3), etc. - form 2-byte (16-bit) integers,
+        into array of integers.
+        
+        USAGE:
+            my_di4108.convert_bytes_to_int(bytes_data_array)
+
+        INPUT:
+            raw_data_array=array of bytes data, each element of which is a byte
+
+        OUTPUT:
+            array with half length of raw_data, but converted to integers.
+            
+        T. Golfinopoulos, 12 Sept. 2018
+        '''
+        #Combine separated two-bytes into one number
+        my_data=[None]*int(len(bytes_data)/2)
+
+        for i in range(len(my_data)) :
+            my_data[i]=bytes_data[2*i]+(bytes_data[2*i+1]<<8)
+            
+        return my_data
+        
     def convert_data(self,raw_data_array):
         '''
         Convert data to floating point values (where appropriate) according to ranges.
