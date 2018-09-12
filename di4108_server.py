@@ -430,7 +430,7 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 if __name__ == "__main__":
     # Use SITE0 Port - this appears to be the main port for the acq400 class devices for i/o
-    HOST, PORT = "localhost", AcqPorts.SITE0
+    HOST, PORT = "198.125.177.3", AcqPorts.SITE0
     
     host_addr=(HOST,PORT)
     ThreadedTCPServer.allow_reuse_address = True
