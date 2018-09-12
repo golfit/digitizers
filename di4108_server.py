@@ -366,8 +366,8 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
         if 'n_samps_pre' in new_settings.keys() :
             self.n_samps_pre=new_settings['n_samps_pre']
         
-        if 'n_samps_pre' in new_settings.keys() :
-            self.n_samps_pre=new_settings['n_samps_pre']
+        if 'n_samps_post' in new_settings.keys() :
+            self.n_samps_pre=new_settings['n_samps_post']
         
         #Remove settings that are not properties of DI4108
         for k in new_settings.keys() :

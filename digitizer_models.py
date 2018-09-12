@@ -342,7 +342,7 @@ class DI4108_WRAPPER :
         for elem in raw_data[0:] : #Skip first sample - from ps
             data+=elem
 
-        my_data=self.convert_bytes_to_int(data)
+        my_data=DI4108_WRAPPER.convert_bytes_to_int(data)
         
         return (my_data,tf-t0,data)
 
@@ -352,14 +352,15 @@ class DI4108_WRAPPER :
             val = val - (1 << bits)        # compute negative value
         return val
 
-    def convert_bytes_to_int(self,bytes_data):
+    @staticmethod
+    def convert_bytes_to_int(bytes_data):
         '''
         Convert array consists of list of single-byte elements,
         where pairs of elements - (0,1), (2,3), etc. - form 2-byte (16-bit) integers,
         into array of integers.
         
         USAGE:
-            my_di4108.convert_bytes_to_int(bytes_data_array)
+            DI4108_WRAPPER.convert_bytes_to_int(bytes_data_array)
 
         INPUT:
             raw_data_array=array of bytes data, each element of which is a byte
