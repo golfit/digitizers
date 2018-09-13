@@ -61,7 +61,7 @@ my_di4108=DI4108_WRAPPER(**json.loads(json.dumps(settings)))
 print('V_range={}'.format(my_di4108.v_range))
 
 #Connect to server
-host = 'localhost' #'198.125.177.3'
+host = '198.125.177.3' #'localhost'
 port = 4220
 server_addr=(host,port)
 
