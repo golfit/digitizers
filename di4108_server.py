@@ -167,7 +167,8 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
         self._protocol_dict={'init':self.handle_init,\
                             'trig_pulse':self.handle_trig_pulse,\
                             'store':self.handle_store,\
-                            'get_settings':self.handle_get_settings}
+                            'get_settings':self.handle_get_settings,\
+                            'query_data_length':self.handle_query_data_length}
                             #'start_stream':None,'stop':None,'n_samps_pre':None,'n_samps_post':None,\
                             #'test':None,'get_seg':None]
         self.store_mode='pulse' #Alternative is "stream"
@@ -202,16 +203,24 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
     MAX_FILE_SIZE=1024*1024*1024 #1 GB=maximum file size
 
     def handle(self):
+        '''
+        data = str(self.request.recv(1024), 'ascii')
+        cur_thread = threading.current_thread()
+        response = bytes("{}: {}".format(cur_thread.name, data), 'ascii')
+        print(response)
+        self.request.sendall(response)
+        self.request.close()
+    
+        '''
         #Use recv - loop until transmission is complete and socket returns empty
-        this_data = str(self.request.recv(ThreadedTCPRequestHandler.buffer_size).strip(), 'ascii')
+        this_data = str(self.request.recv(ThreadedTCPRequestHandler.buffer_size), 'ascii')
         data=this_data
-        while len(this_data) > 0 and len(data)<ThreadedTCPRequestHandler.max_size :
-            this_data = str(self.request.recv(ThreadedTCPRequestHandler.buffer_size).strip(), 'ascii')
-            data+=this_data
+        #while len(this_data) > 0 and len(data)<ThreadedTCPRequestHandler.max_size :
+        #    this_data = str(self.request.recv(ThreadedTCPRequestHandler.buffer_size).strip(), 'ascii')
+        #    data+=this_data
         #Use readline to read request until newline character is encountered
         #data = str(self.rfile.readline(), 'ascii')
 
-        print(data)
         #Get thread
         cur_thread = threading.current_thread()
         response = bytes("{}: {}".format(cur_thread.name, data), 'ascii') #Convert to bytes format first
@@ -231,7 +240,6 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
             end_tag_pos=[t[1] for t in end_tags]
             content_pos=[c[1] for c in content]
             
-            
             content_tags=[]
             
             #Traverser through start_tags.
@@ -241,37 +249,33 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
             for start_tag in start_tags :
                 #Recall that tags are stored as tuples, with first element the string,
                 #and second the absolute position in the transmission
-                print(start_tag)
-                print(self._protocol_dict.keys())
+                if debugging():
+                    print(start_tag)
+                    print(self._protocol_dict.keys())
+                    print(start_tags)
+                    print(content)
+                    print(end_tags)
                 if start_tag[0] in self._protocol_dict.keys() :
                     if (start_tag[1]+1) in content_pos and (start_tag[1]+2) in end_tag_pos :
-                        if end_tags[ent_tag_pos.index(start_tag[1]+2)]==start_tag :
+                        if end_tags[end_tag_pos.index(start_tag[1]+2)][0]==start_tag[0] :
                             #Call with content as argument
-                            self._protocol_dict[start_tag[0]](content[content_pos.index(start_tag[1]+1)])
+                            self._protocol_dict[start_tag[0]](content[content_pos.index(start_tag[1]+1)][0])
                     else :
                         self._protocol_dict[start_tag[0]]()
         except:
             print("Error - can't handle "+data)
             raise
             
-        #for tag in start_tags :
-            #Check if tag encloses data
-            
-            #Otherwise, try 
-        
-#        if data.lower()=='start' :
-#            my_di4108.trig_data_pulse()
-#        elif data.lower()=='stop' :
-
-        #all_keys=DI4108_WRAPPER.__dict__.keys()
-        #setting_keys=[]
-        #for k in all_keys :
-        #    if type(DI4108_WRAPPER.__dict__[k]) is function :
-        #        setting_keys.append(k)
-        
-        
         #Return data for debugging purposes
-        self.request.sendall(response)
+        if debugging():
+            print('Done - ready to send shutdown message')
+        #self.request.sendall(response)
+        #self.request.sendall(''.encode()) #Send empty to close
+        self.request.shutdown(socket.SHUT_RDWR)
+        self.request.close()
+        if debugging():    
+            print('Done handling request')
+        
     
     def handle_trig_pulse(self):
         '''
@@ -316,6 +320,7 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
         
         if debugging():
             print("Received store request - about to send data, {} elements...".format(len(STORE_DATA.data[this_port])))
+        #time.sleep(3)
         
         #self.request.sendall(bytes(self.data))
         #Read data from file
@@ -328,6 +333,24 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
         
         if debugging():
             print("...sent stored data")
+    
+    def handle_query_data_length(self) :
+        '''
+        Send length of last data read (number of bytes) to requester.
+        
+        T. Golfinopoulos, 12 Sept. 2018
+        '''
+        this_port=AcqPorts.SITE0
+        
+        if debugging():
+            print("Received query_data_length request...")
+        data_length=len(STORE_DATA.data[this_port])
+        #data_length_bytes=data_length.to_bytes((data_length.bit_length()+7)//8,'big')
+        #self.request.sendall(data_length_bytes) #// = integer divide
+        self.request.sendall(bytes(str(data_length),'ascii'))
+        
+        if debugging():
+            print("...sent data length")
             
     def handle_get_settings(self):
         '''
@@ -369,10 +392,18 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
         if 'n_samps_post' in new_settings.keys() :
             self.n_samps_pre=new_settings['n_samps_post']
         
+        if debugging():
+            print("New settings: {}".format(new_settings))
+        
         #Remove settings that are not properties of DI4108
+        #Do this with a list of tuples as an intermediate set,
+        #since dictionaries are immutable in iteration
+        prop_pairs=[]
         for k in new_settings.keys() :
-            if not k in setting_keys :
-                new_settings.pop(k)
+            if k in setting_keys :
+                prop_pairs.append((k,new_settings[k]))
+        
+        new_settings=dict(prop_pairs)
         
         if debugging():
             print(new_settings)
@@ -430,7 +461,8 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 if __name__ == "__main__":
     # Use SITE0 Port - this appears to be the main port for the acq400 class devices for i/o
-    HOST, PORT = "198.125.177.3", AcqPorts.SITE0
+    #HOST, PORT = "198.125.177.3", AcqPorts.SITE0
+    HOST, PORT = "localhost", AcqPorts.SITE0
     
     host_addr=(HOST,PORT)
     ThreadedTCPServer.allow_reuse_address = True

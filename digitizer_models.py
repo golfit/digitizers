@@ -392,8 +392,9 @@ class DI4108_WRAPPER :
             raw_data_array=array of data, each element of which is an integer
 
         OUTPUT:
-            array with same length of raw_data, but converted to floating point for
-            analog channels, according to voltage range.
+            array with same number of elements as raw_data, but (a) converted to floating point for
+            analog channels, according to voltage range, and (b) resized to
+            (number of recorded channels)x(number of time samples).
         '''
         output_data_array=[None]*len(raw_data_array)
         
@@ -426,8 +427,12 @@ class DI4108_WRAPPER :
             if self.counter_in :
                 ptr+=1
                 output_data_array[ptr]=raw_data_array[ptr]+32768
-                
-        return output_data_array   
+        
+        #Break up into array of size, self.number_records x num_samples
+        split_data=[]
+        for i in range(self.number_records):
+            split_data.append([output_data_array[j] for j in range(i,len(output_data_array),self.number_records)])
+        return split_data #output_data_array   
 
     def process_range(range_arg,allowed_range_vals) :
         '''
