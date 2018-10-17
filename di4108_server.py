@@ -172,8 +172,8 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
                             #'start_stream':None,'stop':None,'n_samps_pre':None,'n_samps_post':None,\
                             #'test':None,'get_seg':None]
         self.store_mode='pulse' #Alternative is "stream"
-        self.n_pre_samps=0
-        self.n_pos_samps=1E4
+        self.n_samps_pre=0
+        self.n_samps_pos=1E4
         self.pulse_duration=1.0 #Default pulse length [s]
         #self.data=[] #Array for storing pulse data
         #self.elapsed_time=0 #Time elapsed during data pulse [s]
@@ -390,7 +390,7 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
             self.n_samps_pre=new_settings['n_samps_pre']
         
         if 'n_samps_post' in new_settings.keys() :
-            self.n_samps_pre=new_settings['n_samps_post']
+            self.n_samps_post=new_settings['n_samps_post']
         
         if debugging():
             print("New settings: {}".format(new_settings))
@@ -419,10 +419,10 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
              raise
              
         #Calculate new post-trigger pulse length based on number of samples and sampling frequency
-        self.pulse_duration=self.n_samps_pos/ThreadedTCPRequestHandler.my_di4108.fs
+        self.pulse_duration=self.n_samps_post/ThreadedTCPRequestHandler.my_di4108.fs
         
         #Write current settings to file
-        f=open(self.settings_file_name)
+        f=open(self.settings_file_name,'w')
         f.write(self.settings_to_json())
         f.close()
         
@@ -430,10 +430,13 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
             print("Initialization complete!")
              
     def settings_to_json(self):
-        all_keys=DI4108_WRAPPER.__dict__.keys()
+        all_keys=ThreadedTCPRequestHandler.my_di4108.__dict__.keys() #DI4108_WRAPPER.__dict__.keys()
+        print("All keys:")
+        print(all_keys)
         settings={}
         for k in all_keys :
-            if type(DI4108_WRAPPER.__dict__[k]) is property :
+            #if type(DI4108_WRAPPER.__dict__[k]) is property :
+            if type(ThreadedTCPRequestHandler.my_di4108.__dict__[k]) is property :
                 settings[k]=ThreadedTCPRequestHandler.my_di4108.__dict__[k]
         
         #Add settings that are not part of di4108 object
@@ -451,6 +454,30 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
         self._store_mode='pulse'
         self.parser = MyHTMLParser()
         super().serve_forever(*argv,**kwargs)
+    
+    @property
+    def  n_samps_pre(self):
+        return self._n_samps_pre
+    
+    @n_samps_pre.setter
+    def n_samps_pre(self,n_samps_pre):
+        self._n_samps_pre=n_samps_pre
+    
+    @property
+    def  n_samps_post(self):
+        return self._n_samps_post
+    
+    @n_samps_post.setter
+    def n_samps_post(self,n_samps_post):
+        self._n_samps_post=n_samps_post
+    
+    @property
+    def store_mode(self):
+        return self._store_mode
+    
+    @store_mode.setter
+    def store_mode(self,store_mode):
+        self._store_mode=store_mode
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     def serve_forever(self,*argv,**kwargs):
