@@ -12,6 +12,7 @@ import time
 import numpy
 import matplotlib.pyplot as plt
 import copy
+import pickle
 
 WAIT_TIME=1
 
@@ -22,11 +23,11 @@ for k in DI4108_WRAPPER.__dict__.keys() :
         print(k)
         props.append(k)
         
-pulse_duration=2 #Length of pulse [s]
-fs=5000 #Sampling frequency [Hz]
+pulse_duration=0.5 #Length of pulse [s]
+fs=10000 #Sampling frequency [Hz]
 n_samps_post=int(pulse_duration*fs)
 
-settings={'fs':fs,'v_range':1,'chans':1}
+settings={'fs':fs,'v_range':1,'chans':8}
 #Settings configure DI4108; init_settings contain possible additional information: n_samps_post,n_samps_pre,pulse_mode
 init_settings=copy.deepcopy(settings)
 
@@ -111,6 +112,11 @@ print(response_bytes[0:10])
 v=my_di4108.convert_data(DI4108_WRAPPER.convert_bytes_to_int(all_response))
 
 t=numpy.linspace(0,pulse_duration-1/fs,len(v[0]))
+
+data_dict={'raw':all_response,'bytes':response_bytes,'v':v,'t':t}
+#data_dict={'v':v,'t':t}
+write_file=open('last_data.p','wb')
+pickle.dump(data_dict,write_file)
 
 for i in range(len(v)):
     if i>3 :
