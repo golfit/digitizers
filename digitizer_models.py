@@ -109,7 +109,8 @@ class DI4108_WRAPPER :
         #self.poll_time=poll_time
         
         self.packet_buffer_size=packet_buffer_size #Store this many packets between reads
-
+        self.packet_time=packet_time
+        
         self.poll_time=self.packet_buffer_size*packet_time
         self.packet_size=packet_size #Size of packets transferred in each sample.
 
@@ -279,7 +280,19 @@ class DI4108_WRAPPER :
         self.ep_out.write('ps {}'.format(self._packet_size_ind))
 
         #Read device once to clear out buffer
-        self.ep_in.read(self.packet_size*5,self.timeout)
+        #self.ep_in.read(self.packet_size*5,self.timeout)
+        #Addendum: 18 Oct. 2018 - apparently, reading buffer
+        #only once is not enough, and leftover items in buffer
+        #can offset byte pattern that can ruin interpretation of
+        #data.  Usually seems to be clear after two reads
+        print("---CLEAR BUFFER---")
+        for i in range(5):
+            try :
+                print("".join([chr(x) for x in self.read()]))
+            except:
+                print("Buffer clear after {} reads".format(i))
+                break
+        print("---")
 
     def read(self):
         '''

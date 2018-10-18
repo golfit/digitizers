@@ -22,11 +22,11 @@ for k in DI4108_WRAPPER.__dict__.keys() :
         print(k)
         props.append(k)
         
-pulse_duration=0.5 #Length of pulse [s]
-fs=10000 #Sampling frequency [Hz]
-n_samps_post=int(pulse_duration/fs)
+pulse_duration=2 #Length of pulse [s]
+fs=5000 #Sampling frequency [Hz]
+n_samps_post=int(pulse_duration*fs)
 
-settings={'fs':fs,'v_range':1,'chans':8}
+settings={'fs':fs,'v_range':1,'chans':1}
 #Settings configure DI4108; init_settings contain possible additional information: n_samps_post,n_samps_pre,pulse_mode
 init_settings=copy.deepcopy(settings)
 
