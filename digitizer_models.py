@@ -220,8 +220,7 @@ class DI4108_WRAPPER :
             #5=>+-0.2 V.  See protocol.
             #Bit-shift code number by eight bits to put between bits 
             #8-11 for voltage range.
-            record_config_number.append(self.chans[i]+(self._v_code<<8))
-        
+            record_config_number.append(self.chans[i]+(self._v_code<<8))        
 
         #If digital inputs are requested, add to list.
         #This input set is activated with the number, 8 (i.e. 0b0000000000001000)
@@ -246,7 +245,7 @@ class DI4108_WRAPPER :
         
         #Invoke slist commands to configure device
         for record_counter in range(len(record_config_number)) :
-            self.ep_out.write('slist {} {}'.format(record_counter,record_config_number[i]))
+            self.ep_out.write('slist {} {}'.format(record_counter,record_config_number[record_counter]))
         
         #Next, set sampling frequency
         #Calculate srate parameter from desired sampling frequency, self.fs
