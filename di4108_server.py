@@ -192,6 +192,11 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
             except :
                 if debugging():
                     print("Can't create new settings file - may exist already - try to open and use")
+        
+        '''
+        #Settings persist in class variable, my_di4108, which is non-extensible - could become a dictionary
+        #with port number as key.  Else read each time from json, whose name contains port.
+        #But still rely on persistence of my_di4108 class variable to get data.
         try :
             #Try to load existing settings
             f=open(self.settings_file_name,'r')
@@ -202,8 +207,8 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
         except :
             if debugging():
                 print("Can't open settings file - may exist already, or may have permissions error, etc.")
-                
-            STATE.states[this_port]=STATE.ARM #Armed, since ready for trigger
+        '''
+        STATE.states[this_port]=STATE.ARM #Armed, since ready for trigger
         
         if debugging():
             print("STATE="+str(STATE.states[this_port]))
@@ -305,6 +310,7 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
         #(self.data,self.elapsed_time)=ThreadedTCPRequestHandler.my_di4108.trig_data_pulse(self.pulse_duration)
         (data,elapsed_time,bytes_data)=ThreadedTCPRequestHandler.my_di4108.trig_data_pulse(self.pulse_duration)
         
+        STATE.states[this_port]=STATE.POPROCESS
         #f=open(self.data_file_name,'w')
         #f.write(bytes(data)) #Write data as bytes
         #f.close()
