@@ -189,6 +189,8 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
                 f=open(self.settings_file_name,'x')
                 f.write(self.settings_to_json())
                 f.close()
+
+                STATE.states[this_port]=STATE.ARM #Armed, since ready for trigger
             except :
                 if debugging():
                     print("Can't create new settings file - may exist already - try to open and use")
@@ -208,10 +210,15 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
             if debugging():
                 print("Can't open settings file - may exist already, or may have permissions error, etc.")
         '''
-        STATE.states[this_port]=STATE.ARM #Armed, since ready for trigger
         
         if debugging():
             print("STATE="+str(STATE.states[this_port]))
+        
+        #Read settings from json, since this init is run on every new request....
+        self.reinitialize()
+        
+        #This really has to be the last thing in the __init__ method of the subclass; it seems to
+        #run handle on its own.  And so any initializations have to be applied before this.
         super(ThreadedTCPRequestHandler,self).__init__(*arg,**kwargs)
         
     #my_di4108=None
@@ -383,14 +390,22 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
         #current_settings_json_string=self.settings_to_json()
         f=open(self.settings_file_name,'r') #Read from file
         current_settings=f.read(ThreadedTCPRequestHandler.max_size)
+        f.close()
         self.request.sendall(bytes(current_settings_json_string,'ascii'))
         
         if debugging():
             print("Sent settings\n{}".format(current_settings_json_string))
+    
+    def config_from_json_string(self,settings_json):
+        '''
+        my_server.config_from_json_string(my_json_string)
         
-    def handle_init(self,settings_json):
-        if debugging():
-            print("Received init request - about to initialize device...")
+        Read json string and apply settings to instance of server.
+        
+        returns dictionary of new settings.
+        
+        T. Golfinopoulos, 23 Oct. 2018
+        '''
         #Parse, and remove any keys that are not keywords of DI4108
         all_keys=DI4108_WRAPPER.__dict__.keys()
         setting_keys=[]
@@ -413,7 +428,12 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
         
         if 'n_samps_post' in new_settings.keys() :
             self.n_samps_post=new_settings['n_samps_post']
-        
+
+        #Calculate new post-trigger pulse length based on number of samples and sampling frequency
+        self.pulse_duration=self.n_samps_post/ThreadedTCPRequestHandler.my_di4108.fs
+        if debugging():
+            print("Pulse duration: {} s".format(self.pulse_duration))
+
         if debugging():
             print("New settings: {}".format(new_settings))
         
@@ -431,6 +451,30 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
             print("New settings:")
             print(new_settings)
         
+        return new_settings
+
+    def reinitialize(self):
+        '''
+        my_server.reinitialize()
+        
+        Read json settings file and re-apply settings - for threaded servers, this seems to be necessary.
+        
+        Returns dictionary of settings.
+        
+        T. Golfinopoulos, 23 Oct. 2018
+        '''
+        f=open(self.settings_file_name,'r') #Read from file
+        current_settings_json=f.read(ThreadedTCPRequestHandler.max_size)
+        f.close()
+
+        return self.config_from_json_string(current_settings_json)
+        
+    def handle_init(self,settings_json):
+        if debugging():
+            print("Received init request - about to initialize device...")
+        
+        new_settings=self.config_from_json_string(settings_json)
+        
         try :        
             if ThreadedTCPRequestHandler.my_di4108 is None :
                 #Digitizer object - to implement: multiple digitizer support, singleton
@@ -441,11 +485,6 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
              print("Can't configure DI4108") 
              raise
              
-        #Calculate new post-trigger pulse length based on number of samples and sampling frequency
-        self.pulse_duration=self.n_samps_post/ThreadedTCPRequestHandler.my_di4108.fs
-        if debugging():
-            print("Pulse duration: {} s".format(self.pulse_duration))
-        
         #Write current settings to file
         f=open(self.settings_file_name,'w')
         f.write(self.settings_to_json())
