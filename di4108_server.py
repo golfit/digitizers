@@ -508,6 +508,7 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
                 settings[k]=ThreadedTCPRequestHandler.my_di4108.__dict__['_'+k]
         
         #Add settings that are not part of di4108 object
+        #Add these settings to di4108 object
         settings['store_mode']=self.store_mode
         settings['n_samps_pre']=self.n_samps_pre
         settings['n_samps_post']=self.n_samps_post

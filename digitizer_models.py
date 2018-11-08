@@ -21,12 +21,14 @@ class DI4108_WRAPPER :
     
     def __init__(self,fs=10000,v_range=None,chans=None,dig_in=False, \
      rate_in=False, rate_range=None, ffl=None, counter_in=False,dec=1,filt_settings=None,\
-     packet_size=None,packet_buffer_size=5,packet_time=0.005):
+     packet_size=None,packet_buffer_size=5,packet_time=0.005,store_mode='pulse',n_samps_pre=0,\
+     n_samps_post=10000,max_samps=10E6):
         '''
         Initialize instance of DI4108_WRAPPER object.  Attributes:
         def __init__(self,fs=10000,v_range=10,chans=8,dig_in=False,  \
          rate_in=False, rate_range=1,counter_in=False,dec=1,filt_settings=None,\
-         packet_size=None, packet_buffer_size=5,packet_time=0.005)
+         packet_size=None, packet_buffer_size=5,packet_time=0.005,store_mode='pulse',n_samps_pre=0,\
+         n_samps_post=1000,max_samps=10E6)
      
         fs=sampling frequency in Hz.  Must be <=160000 Hz
         
@@ -61,6 +63,14 @@ class DI4108_WRAPPER :
         packet_buffer_size=number of packets between data polls (i.e. number of packets in on-device buffer).  Default=5
 
         packet_time=time between data reads (units=seconds).  Default=0.005 s.  Poll time=packet_time*packet_buffer_size.
+        
+        pulse_mode=string argument, either "pulse" for transient record of fixed length, or "stream" for continuous sampling (though bounded)
+        
+        n_samps_pre=number of pre-trigger samples to store.  Keyword argument, default=0
+        
+        n_samps_post=number of post-trigger samples to store.  Keyword argument, default=10000
+        
+        max_samps=maximum number of samples that can be stored.  Keyword argument, default=10E6
         
         T. Golfinopoulos, 24 August 2018
         '''
@@ -113,6 +123,13 @@ class DI4108_WRAPPER :
         
         self.poll_time=self.packet_buffer_size*packet_time
         self.packet_size=packet_size #Size of packets transferred in each sample.
+        
+        self.pulse_mode=pulse_mode
+        
+        self.max_samps=max_samps #Must set this first
+        #Set these after max_samps so they can be limited by that parameter
+        self.n_samps_post=n_samps_post #Set this before n_samps_pre
+        self.n_samps_pre=n_samps_pre
 
         if self.debugging():
             print("Packet size={}".format(self.packet_size))
@@ -500,6 +517,53 @@ class DI4108_WRAPPER :
         allowed_rate,rate_ind=DI4108_WRAPPER.process_range(rate_range,allowed_rate_ranges)
         return (allowed_rate,rate_ind+1)
 
+    @property
+    def pulse_mode(self):
+        return self._pulse_mode
+    
+    @pulse_mode.setter
+    def pulse_mode(self,pulse_mode):
+        if not pulse_mode.lower() == 'pulse' or not pulse_mode.lower()=='stream':
+            raise ValueError("pulse_mode input must either be the string, 'pulse' or 'stream' -- you entered {}".format(pulse_mode))
+        else :
+            self._pulse_mode=pulse_mode.lower()
+
+    @property
+    def n_samps_pre(self):
+        return self._n_samps_pre
+    
+    @n_samps_pre.setter
+    def n_samps_pre(self,n_samps_pre):
+        if n_samps_pre+self.n_samps_post > self.max_samps :
+            raise ValueError("Maximum number of samples was set to {}; post-trigger samples set to {}; requested value of pre-trigger samples, {}, exceeds maximum value".format(self.max_samps,self.n_samps_post,n_samps_pre))
+        elif n_samps_pre<0 :
+            raise ValueError("n_samps_pre must be greater than or equal to 0; requested value is {}".format(n_samps_pre))
+        else :
+            self._n_samps_pre=n_samps_pre
+
+    @property
+    def n_samps_post(self):
+        return self._n_samps_post
+    
+    @n_samps_post.setter
+    def n_samps_post(self,n_samps_post):
+        if n_samps_post > self.max_samps :
+            raise ValueError("Maximum number of samples was set to {}; requested value of post-trigger samples, {}, exceeds maximum value".format(self.max_samps,self.n_samps_post))
+        elif n_samps_post<0 :
+            raise ValueError("n_samps_post must be greater than or equal to 0; requested value is {}".format(n_samps_post))
+        else :
+            self._n_samps_post=n_samps_post
+    
+    @property
+    def max_samps(self):
+        return self._max_samps
+    
+    @max_samps.setter
+    def max_samps(self,max_samps):
+        if max_samps<0 :
+            raise ValueError("max_samps must be greater than or equal to 0; requested value is {}".format(max_samps))
+        self._max_samps=max_samps
+            
     @property
     def fs(self):
         return self._fs
