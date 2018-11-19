@@ -21,13 +21,13 @@ class DI4108_WRAPPER :
     
     def __init__(self,fs=10000,v_range=None,chans=None,dig_in=False, \
      rate_in=False, rate_range=None, ffl=None, counter_in=False,dec=1,filt_settings=None,\
-     packet_size=None,packet_buffer_size=5,packet_time=0.005,store_mode='pulse',n_samps_pre=0,\
+     packet_size=None,packet_buffer_size=5,packet_time=0.005,store_mode='pulse',trig_mode='soft',n_samps_pre=0,\
      n_samps_post=10000,max_samps=10E6):
         '''
         Initialize instance of DI4108_WRAPPER object.  Attributes:
         def __init__(self,fs=10000,v_range=10,chans=8,dig_in=False,  \
          rate_in=False, rate_range=1,counter_in=False,dec=1,filt_settings=None,\
-         packet_size=None, packet_buffer_size=5,packet_time=0.005,store_mode='pulse',n_samps_pre=0,\
+         packet_size=None, packet_buffer_size=5,packet_time=0.005,store_mode='pulse',trig_mode='soft',n_samps_pre=0,\
          n_samps_post=1000,max_samps=10E6)
      
         fs=sampling frequency in Hz.  Must be <=160000 Hz
@@ -64,7 +64,9 @@ class DI4108_WRAPPER :
 
         packet_time=time between data reads (units=seconds).  Default=0.005 s.  Poll time=packet_time*packet_buffer_size.
         
-        pulse_mode=string argument, either "pulse" for transient record of fixed length, or "stream" for continuous sampling (though bounded)
+        store_mode=string argument, either "pulse" for transient record of fixed length, or "stream" for continuous sampling (though bounded)
+        
+        trig_mode=string argument, either "soft" or "hard" - default="soft;" "hard" implies trigger will come from a rising edge on D6.
         
         n_samps_pre=number of pre-trigger samples to store.  Keyword argument, default=0
         
@@ -111,6 +113,17 @@ class DI4108_WRAPPER :
         self.dig_in=dig_in #Boolean flag indicating whether or not to store digital inputs
         self.counter_in=counter_in #Boolean flag indicating whether to store counter input
         self.rate_in=rate_in #Boolean flag indicating whether to store rate input
+        
+        self.trig_mode=trig_mode
+        self.store_mode=store_mode
+
+        self.max_samps=max_samps #Must set this first
+        #Set these after max_samps so they can be limited by that parameter
+        self.n_samps_post=n_samps_post #Set this before n_samps_pre
+        self.n_samps_pre=n_samps_pre
+
+        if self.trig_mode=='hard' or self.n_samps_pre>0 and not self.dig_in :
+            self.dig_in=True #Need digital inputs for hardware triggers and pre-trigger samples
 
         #Add additional data entries to nchans to account for data size per sample.
         #Each channel corresponds to 2 bytes (16 bits) of data.
@@ -123,13 +136,6 @@ class DI4108_WRAPPER :
         
         self.poll_time=self.packet_buffer_size*packet_time
         self.packet_size=packet_size #Size of packets transferred in each sample.
-        
-        self.pulse_mode=pulse_mode
-        
-        self.max_samps=max_samps #Must set this first
-        #Set these after max_samps so they can be limited by that parameter
-        self.n_samps_post=n_samps_post #Set this before n_samps_pre
-        self.n_samps_pre=n_samps_pre
 
         if self.debugging():
             print("Packet size={}".format(self.packet_size))
@@ -240,8 +246,11 @@ class DI4108_WRAPPER :
             record_config_number.append(self.chans[i]+(self._v_code<<8))        
 
         #If digital inputs are requested, add to list.
+        #Also add in case hardware trigger is requested - as of e-mail communication
+        #with DATAQ on 15 Nov. 2018, hardware start isn't available from protocol,
+        #so need to do via sampling.
         #This input set is activated with the number, 8 (i.e. 0b0000000000001000)
-        if self.dig_in :
+        if self.dig_in or self.trig_mode=='hard' or self.n_pre_samps>0:
             record_config_number.append(8)
         
         #If rate input is requested, add to list.
@@ -256,9 +265,12 @@ class DI4108_WRAPPER :
         #code, 10
         if self.counter_in :
             record_config_number.append(10)
-
+        print('before assert')
         #Make sure number of records matches configured number of records
         assert(len(record_config_number)==self.number_records)
+        
+        print("RECORD CONFIG NUMBER")
+        print(record_config_number)
         
         #Invoke slist commands to configure device
         for record_counter in range(len(record_config_number)) :
@@ -301,8 +313,18 @@ class DI4108_WRAPPER :
         #only once is not enough, and leftover items in buffer
         #can offset byte pattern that can ruin interpretation of
         #data.  Usually seems to be clear after two reads
+        self.clear_buffer()
+        
+        #Set LED to blue
+        self.set_led(1)
+    
+    def clear_buffer(self,num_reads=5):
+        '''
+        Read several times to clear a buffer.
+        '''
+        
         print("---CLEAR BUFFER---")
-        for i in range(5):
+        for i in range(num_reads):
             try :
                 print("".join([chr(x) for x in self.read()]))
             except:
@@ -348,12 +370,62 @@ class DI4108_WRAPPER :
         '''
         self.ep_out.write('info 0')
         
+        #Set LED to green
+        self.set_led(2)
+        
         num_polls=ceil(pulse_duration/self.poll_time)
         raw_data=[None]*num_polls #Preallocate list
+        pre_samps=[None]*self.n_samps_pre #Preallocate pre-trigger samples
 
         self.ep_out.write('start 0') #Start collecting data.
+        
+        first_post_trig_data=None
+        self.clear_buffer()
+        
+        t_last=time.time()
+        if self.trig_mode=='hard' or self.n_samps_pre>0:
+            nvals=self.nchans+self.dig_in+self.rate_in+self.counter_in
+            #Poll trigger input
+            while True :
+                print("one read")
+                one_read=self.read() #Read data
+                #this_t=time.time()
+                n_samps_read=int(len(one_read)/(2*nvals))
+                #Parse data
+                this_output=self.convert_data(one_read)[0]
+                print(len(this_output))
+                print(this_output)
+                print(self.nchans)
+                #print(this_output[self.nchans::nvals])
+                #If need to get pre-samples
+                #Slice to get only trigger input; perform bitwise and with trigger bit
+                trig_val=0b01000000
+                trig_array=[int(x) & trig_val for x in this_output[self.nchans::nvals]]
+                print(trig_array)
+                if any(trig_array) :
+                    #Find index of trigger
+                    trig_ind=trig_array.index(trig_val)
+                    #[0,0,0,1,1,1,0,0,0] #trig_ind=3
+                    #If n_samps_pre=2, want to start at 2, which is trig_ind+1-2
+                    #Only add pre-trigger samples
+                    if self.n_samps_pre > 0:
+                        #Need to scale by 2*nvals because data arrays consist of nvals consecutive items per sample,
+                        #and each item takes up two bytes in the byte array
+                        pre_samps=pre_samps[((trig_ind+1)*2*nvals):]+one_read[(max(0,(trig_ind+1)-self.n_samps_pre)*2*nvals):((trig_ind+1)*2*nvals)]
+                    first_post_trig_data=one_read[trig_ind:]
+                    break
+                elif self.n_samps_pre > 0 :
+                    #Fill pre-sample list as FIFO
+                    pre_samps=pre_samps[(n_samps_read*2*nvals):]+one_read[(max(0,n_samps_read-self.n_samps_pre)*2*nvals):]
+                #Correct by removing transmission time
+                #wait_time=self.poll_time-(this_t-t_last)
+                #time.sleep(self.poll_time)
+                #t_last=this_t
+                #if wait_time>0:
+                #    time.sleep(wait_time) #Wait until next poll time, if there is time left to wait
+        
         t0=time.time()
-        temp=self.read() #Read data to clear buffer
+
         for i in range(num_polls) :
             raw_data[i]=self.read() #Read data
             tb=time.time()
@@ -364,11 +436,22 @@ class DI4108_WRAPPER :
 
         tf=time.time()
         self.ep_out.write('stop') #Stop data pulse
+        
+        #Set LED to red
+        self.set_led(4)
 
         #Collapse data into one-dimensional array
         if self.debugging():
             print("Number of packets={}".format(len(raw_data)))
+
         data=[]
+        
+        #Add pre-trigger samples and first post-trig samples
+        if self.n_samps_pre>0 :
+            data+=pre_samps
+        if first_post_trig_data != None :
+            data+=first_post_trig_data
+
         #first_data_pt=''.join([chr(x) for x in raw_data[0]])
         #print(first_data_pt)
         for elem in raw_data[0:] : #Skip first sample - from ps
@@ -518,15 +601,29 @@ class DI4108_WRAPPER :
         return (allowed_rate,rate_ind+1)
 
     @property
-    def pulse_mode(self):
-        return self._pulse_mode
+    def trig_mode(self):
+        return self._trig_mode
     
-    @pulse_mode.setter
-    def pulse_mode(self,pulse_mode):
-        if not pulse_mode.lower() == 'pulse' or not pulse_mode.lower()=='stream':
-            raise ValueError("pulse_mode input must either be the string, 'pulse' or 'stream' -- you entered {}".format(pulse_mode))
+    @trig_mode.setter
+    def trig_mode(self,trig_mode):
+        """
+        Trigger mode, either "soft" (software trigger) or "hard" (look for rising edge on D6; start recording after first high value is sampled)
+        """
+        if not trig_mode.lower()=='soft' and not trig_mode.lower()=='hard' :
+            raise ValueError("trig_mode input must either be the string, 'soft', or 'hard' -- you entered {}".format(trig_mode))
         else :
-            self._pulse_mode=pulse_mode.lower()
+            self._trig_mode=trig_mode
+        
+    @property
+    def store_mode(self):
+        return self._store_mode
+    
+    @store_mode.setter
+    def store_mode(self,store_mode):
+        if not store_mode.lower() == 'pulse' and not store_mode.lower()=='stream':
+            raise ValueError("store_mode input must either be the string, 'pulse' or 'stream' -- you entered {}".format(store_mode))
+        else :
+            self._store_mode=store_mode.lower()
 
     @property
     def n_samps_pre(self):
