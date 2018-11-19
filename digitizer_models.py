@@ -250,7 +250,7 @@ class DI4108_WRAPPER :
         #with DATAQ on 15 Nov. 2018, hardware start isn't available from protocol,
         #so need to do via sampling.
         #This input set is activated with the number, 8 (i.e. 0b0000000000001000)
-        if self.dig_in or self.trig_mode=='hard' or self.n_pre_samps>0:
+        if self.dig_in or self.trig_mode=='hard' or self.n_samps_pre>0:
             record_config_number.append(8)
         
         #If rate input is requested, add to list.
@@ -377,31 +377,33 @@ class DI4108_WRAPPER :
         raw_data=[None]*num_polls #Preallocate list
         pre_samps=[None]*self.n_samps_pre #Preallocate pre-trigger samples
 
+        self.clear_buffer()
+        
         self.ep_out.write('start 0') #Start collecting data.
         
         first_post_trig_data=None
-        self.clear_buffer()
-        
+
+        '''
         t_last=time.time()
         if self.trig_mode=='hard' or self.n_samps_pre>0:
             nvals=self.nchans+self.dig_in+self.rate_in+self.counter_in
             #Poll trigger input
             while True :
-                print("one read")
+                #print("one read")
                 one_read=self.read() #Read data
                 #this_t=time.time()
                 n_samps_read=int(len(one_read)/(2*nvals))
                 #Parse data
                 this_output=self.convert_data(one_read)[0]
-                print(len(this_output))
-                print(this_output)
-                print(self.nchans)
+                #print(len(this_output))
+                #print(this_output)
+                #print(self.nchans)
                 #print(this_output[self.nchans::nvals])
                 #If need to get pre-samples
                 #Slice to get only trigger input; perform bitwise and with trigger bit
                 trig_val=0b01000000
                 trig_array=[int(x) & trig_val for x in this_output[self.nchans::nvals]]
-                print(trig_array)
+                #print(trig_array)
                 if any(trig_array) :
                     #Find index of trigger
                     trig_ind=trig_array.index(trig_val)
@@ -423,7 +425,7 @@ class DI4108_WRAPPER :
                 #t_last=this_t
                 #if wait_time>0:
                 #    time.sleep(wait_time) #Wait until next poll time, if there is time left to wait
-        
+        '''
         t0=time.time()
 
         for i in range(num_polls) :
@@ -437,6 +439,7 @@ class DI4108_WRAPPER :
         tf=time.time()
         self.ep_out.write('stop') #Stop data pulse
         
+        #print(raw_data)
         #Set LED to red
         self.set_led(4)
 
